@@ -1,0 +1,23 @@
+services:
+  seating-api:
+    build: .
+    image: roundtable-seating-api:latest
+    container_name: roundtable-seating-api
+    # 必要配置：宿主机端口默认 8000，可用 SEATING_PORT 覆盖
+    ports:
+      - "${SEATING_PORT:-8000}:${PORT:-8000}"
+    environment:
+      # 容器内监听地址与端口（API 地址与端口）
+      HOST: "0.0.0.0"
+      PORT: "${PORT:-8000}"
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import os, urllib.request; urllib.request.urlopen(f'http://127.0.0.1:{os.environ.get(\"PORT\", \"8000\")}/health', timeout=3)"
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
