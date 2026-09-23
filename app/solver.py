@@ -17,6 +17,10 @@ n 位宾客（2 <= n <= 12）围坐圆桌，座位从 1 开始顺次编号，
 首座宾客为 ``first``、末座宾客为 ``prev`` 时的最优值。
 按宾客编号升序枚举即可让元组值 ``(score, 后续序列)`` 的字典序比较
 自然落实同分取字典序最小排列的要求。
+
+``solve_repair`` 用于活动临时调整约束后的修复场景：在同一 DP 上把
+状态值扩展为 ``(换座人数, 得分, 后缀序列)``，先最小化与原座次不一致
+的座位数，再最大化得分、同分取字典序最小。
 """
 from __future__ import annotations
 
@@ -126,6 +130,101 @@ def _better(
     if candidate[0] < current[0] - _EPS:
         return False
     return candidate[1] < current[1]
+
+
+def solve_repair(
+    problem: SeatingProblem, original: list[int]
+) -> tuple[list[int], float, int] | None:
+    """在临时调整约束后求尽量保留原座次的排列。
+
+    依次优化：
+    1. 与 ``original`` 相比换座人数最少（同座位宾客不同即计一人次）；
+    2. 换座人数相同时整圈相邻总得分最高；
+    3. 仍相同时取座位序列字典序最小的排列。
+
+    ``original`` 允许不满足新约束，仅用于比较保留程度。
+    返回 ``(排列, 总得分, 换座人数)``；无可行排列时返回 ``None``。
+    """
+    n = problem.n
+    fixed = problem.fixed
+    full = (1 << n) - 1
+    # memo[(mask, prev, first)] = (换座人数, 得分, 从下一座位开始的后缀序列)
+    memo: dict[tuple[int, int, int], tuple[int, float, tuple[int, ...]]] = {}
+
+    def candidates(mask: int, seat: int) -> list[int]:
+        """座位 ``seat``（1 起）在状态 ``mask`` 下允许放置的宾客（升序）。"""
+        required = fixed.get(seat)
+        if required is not None:
+            bit = 1 << (required - 1)
+            return [required] if not (mask & bit) else []
+        return [g for g in range(1, n + 1) if not (mask & (1 << (g - 1)))]
+
+    def dp(
+        mask: int, prev: int, first: int
+    ) -> tuple[int, float, tuple[int, ...]] | None:
+        key = (mask, prev, first)
+        if key in memo:
+            return memo[key]
+
+        seat = mask.bit_count() + 1
+
+        if mask == full:
+            # 闭合首尾边。n == 2 时首与尾之间仍是同一条邻接边，
+            # 已在入座时计过，不重复计分。
+            if problem.is_forbidden(prev, first):
+                outcome = None
+            else:
+                close_score = 0.0 if n == 2 else problem.score(prev, first)
+                outcome = (0, close_score, ())
+        else:
+            outcome = None
+            for guest in candidates(mask, seat):
+                if problem.is_forbidden(prev, guest):
+                    continue
+                tail = dp(mask | (1 << (guest - 1)), guest, first)
+                if tail is None:
+                    continue
+                changed = int(guest != original[seat - 1]) + tail[0]
+                total = problem.score(prev, guest) + tail[1]
+                candidate = (changed, total, (guest,) + tail[2])
+                if outcome is None or _repair_better(candidate, outcome):
+                    outcome = candidate
+
+        memo[key] = outcome
+        return outcome
+
+    best: tuple[int, float, tuple[int, ...]] | None = None
+    required_first = fixed.get(1)
+    first_guests = (
+        [required_first] if required_first is not None else list(range(1, n + 1))
+    )
+    for first in first_guests:
+        rest = dp(1 << (first - 1), first, first)
+        if rest is None:
+            continue
+        changed = int(first != original[0]) + rest[0]
+        candidate = (changed, rest[1], (first,) + rest[2])
+        if best is None or _repair_better(candidate, best):
+            best = candidate
+
+    if best is None:
+        return None
+    return list(best[2]), best[1], best[0]
+
+
+def _repair_better(
+    candidate: tuple[int, float, tuple[int, ...]],
+    current: tuple[int, float, tuple[int, ...]],
+) -> bool:
+    """candidate 是否更优：换座更少；同分（换座数）下得分更高；
+    再同分则座位序列字典序更小。"""
+    if candidate[0] != current[0]:
+        return candidate[0] < current[0]
+    if candidate[1] > current[1] + _EPS:
+        return True
+    if candidate[1] < current[1] - _EPS:
+        return False
+    return candidate[2] < current[2]
 
 
 def explain_infeasible(problem: SeatingProblem) -> str:

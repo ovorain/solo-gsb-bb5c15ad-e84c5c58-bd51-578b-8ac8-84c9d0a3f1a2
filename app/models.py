@@ -112,6 +112,43 @@ class SeatingRequest(BaseModel):
         return self
 
 
+class RepairSeatingRequest(SeatingRequest):
+    """座位修复请求：在普通优化请求之外附带原座次。"""
+
+    original_arrangement: list[int] = Field(
+        ...,
+        description=(
+            "原座次：从 1 号位起的宾客编号完整排列；"
+            "允许不满足新的禁邻与固定座位约束"
+        ),
+        min_length=1,
+    )
+
+    @model_validator(mode="after")
+    def _validate_original_arrangement(self) -> "RepairSeatingRequest":
+        n = self.guests
+        original = self.original_arrangement
+        if len(original) != n:
+            raise ValueError(
+                f"原座次长度 {len(original)} 与宾客人数 {n} 不一致，"
+                "须提供从 1 号位起的完整排列"
+            )
+        invalid = [guest for guest in original if guest < 1 or guest > n]
+        if invalid:
+            raise ValueError(
+                f"原座次中宾客编号 {invalid[0]} 超出范围，"
+                f"宾客编号须在 1~{n} 之间"
+            )
+        if len(set(original)) != n:
+            duplicates = sorted(
+                {guest for guest in original if original.count(guest) > 1}
+            )
+            raise ValueError(
+                f"原座次中宾客 {duplicates[0]} 重复出现，须为无重复的完整排列"
+            )
+        return self
+
+
 class EdgeScore(BaseModel):
     """圆桌邻接边上的得分明细。"""
 
@@ -135,4 +172,17 @@ class SeatingResponse(BaseModel):
     )
     reason: str | None = Field(
         None, description="无可行排列时的原因说明；可行时为 null"
+    )
+
+
+class RepairSeatingResponse(SeatingResponse):
+    """座位修复结果：在普通响应之外附带换座统计。"""
+
+    changed_count: int | None = Field(
+        None,
+        description="与原座次相比宾客发生变动的座位数；无可行排列时为 null",
+    )
+    changed_seats: list[int] | None = Field(
+        None,
+        description="宾客发生变动的座位号（1 起，升序）；无可行排列时为 null",
     )

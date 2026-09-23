@@ -12,10 +12,14 @@
 - **固定座位**：指定宾客必须坐在指定座位。
 - 优化目标：整圈所有邻接边得分之和最大。
 - 同分裁决：比较 `[1号位宾客, 2号位宾客, …, n号位宾客]` 的字典序，取最小者。
+- **临时调整修复**（`/api/v1/seating/repair`）：在活动临时增删禁邻或固定座位后，
+  以原座次为基准，先最小化**换座人数**（同座位宾客不同即计一人次），
+  再最大化整圈得分，仍同分取字典序最小；原座次允许不满足新约束。
 - 无可行排列：HTTP 200 响应中 `feasible=false` 并给出中文原因（HTTP 422 仅用于非法入参）。
 - 两人（`n=2`）特殊处理：圆桌上两人之间只有一条邻接边，得分只计一次。
 
 算法为位掩码 DP（状态 `(已入座集合, 末位宾客, 首位宾客)`），12 人规模亚秒级完成。
+修复接口在同一 DP 上把状态值扩展为 `(换座人数, 得分, 后缀序列)`。
 
 ## 单条启动命令
 
@@ -113,6 +117,61 @@ SEATING_PORT=9000 docker compose up --build     # 宿主机访问 http://localho
 
 非法入参（编号越界、同一对宾客既禁邻又打分、宾客被固定到多个座位等）返回 HTTP 422。
 
+### `POST /api/v1/seating/repair` — 临时调整约束后修复排列
+
+活动临时新增/取消禁邻或固定座位时使用。请求体在优化接口字段之外，额外携带
+**原座次** `original_arrangement`（从 1 号位起的宾客编号完整排列）。
+原座次须与 `guests` 同规模、无重复且编号合法（即 `1～n` 的一个排列）；
+原座次**允许**不满足新的禁邻与固定座位约束。
+
+```json
+{
+  "guests": 5,
+  "forbidden_pairs": [{"a": 1, "b": 2}],
+  "pair_scores": [{"a": 2, "b": 5, "score": 9}],
+  "fixed_seats": [],
+  "original_arrangement": [1, 2, 3, 4, 5]
+}
+```
+
+服务端只在满足**新**禁邻与固定座位的安排中，依次优化：
+
+1. **换座人数最少**：与原座次逐位比较，宾客不同的座位数最少（尽量保留已通知宾客的座位）；
+2. **整圈得分最高**：换座人数相同时，最大化邻接得分之和；
+3. **字典序最小**：仍相同时取从 1 号位起宾客编号序列字典序最小者。
+
+成功响应沿用 `feasible / guests / arrangement / total_score / edge_scores / reason`
+字段，并额外返回：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `changed_count` | int | 与原座次相比宾客发生变动的座位数 |
+| `changed_seats` | [int] | 宾客发生变动的座位号（1 起，升序） |
+
+```json
+{
+  "feasible": true,
+  "guests": 5,
+  "arrangement": [1, 4, 3, 2, 5],
+  "total_score": 9.0,
+  "edge_scores": [
+    {"seats": [1, 2], "guests": [1, 4], "score": 0.0},
+    {"seats": [2, 3], "guests": [3, 4], "score": 0.0},
+    {"seats": [3, 4], "guests": [2, 3], "score": 0.0},
+    {"seats": [4, 5], "guests": [2, 5], "score": 9.0},
+    {"seats": [1, 5], "guests": [1, 5], "score": 0.0}
+  ],
+  "reason": null,
+  "changed_count": 2,
+  "changed_seats": [2, 4]
+}
+```
+
+不存在满足新约束的排列时，与优化接口语义一致：HTTP 200 且
+`feasible=false`、`arrangement` 为空并给出 `reason`，
+此时 `changed_count` 与 `changed_seats` 均为 `null`。
+`original_arrangement` 长度不符、编号越界或有重复宾客时返回 HTTP 422。
+
 ### `GET /health`
 
 返回 `{"status": "ok"}`，Compose 健康检查使用该接口。
@@ -123,6 +182,19 @@ SEATING_PORT=9000 docker compose up --build     # 宿主机访问 http://localho
 curl -s http://localhost:8000/api/v1/seating/optimize \
   -H 'Content-Type: application/json' \
   -d '{"guests":4,"forbidden_pairs":[{"a":3,"b":4}]}'
+```
+
+临时新增禁邻 (1,2) 后，基于原座次 `[1,2,3,4,5]` 做最小换座修复：
+
+```bash
+curl -s http://localhost:8000/api/v1/seating/repair \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "guests": 5,
+    "forbidden_pairs": [{"a": 1, "b": 2}],
+    "pair_scores": [{"a": 2, "b": 5, "score": 9}],
+    "original_arrangement": [1, 2, 3, 4, 5]
+  }'
 ```
 
 ## 运行测试
