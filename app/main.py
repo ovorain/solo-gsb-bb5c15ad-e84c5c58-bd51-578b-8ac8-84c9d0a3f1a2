@@ -18,8 +18,8 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
-from app.models import SeatingRequest
-from app.service import optimize
+from app.models import RepairRequest, SeatingRequest
+from app.service import optimize, repair
 
 app = FastAPI(
     title="圆桌座位优化 API",
@@ -27,8 +27,9 @@ app = FastAPI(
         "在避开禁邻宾客对、满足固定座位的前提下，"
         "最大化圆桌整圈（含首尾相邻）的相邻得分；"
         "同分时返回从 1 号位起宾客编号序列字典序最小的排列。"
+        "另提供 /repair 接口：临时调整约束时尽量保留已通知宾客的原座位。"
     ),
-    version="1.0.0",
+    version="1.1.0",
 )
 
 
@@ -44,6 +45,15 @@ def health() -> dict[str, str]:
 )
 def optimize_seating(request: SeatingRequest) -> dict:
     return optimize(request).model_dump()
+
+
+@app.post(
+    "/api/v1/seating/repair",
+    tags=["座位优化"],
+    summary="临时调整约束后修复座次（尽量保留已通知宾客的座位）",
+)
+def repair_seating(request: RepairRequest) -> dict:
+    return repair(request).model_dump()
 
 
 @app.exception_handler(ValidationError)

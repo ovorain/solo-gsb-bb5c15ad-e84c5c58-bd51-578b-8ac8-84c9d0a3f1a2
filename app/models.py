@@ -112,6 +112,48 @@ class SeatingRequest(BaseModel):
         return self
 
 
+class RepairRequest(SeatingRequest):
+    """临时调整约束后的座位修复请求。
+
+    在沿用宾客人数、禁邻、得分与固定座位的基础上，额外携带调整前已通知宾客的
+    原座次；原座次只要求是同规模、无重复的完整排列，允许不符合新约束。
+    """
+
+    original_arrangement: list[int] = Field(
+        ...,
+        description="原座次：从 1 号位起的宾客编号完整排列，允许不符合新约束",
+        min_length=1,
+    )
+
+    @model_validator(mode="after")
+    def _validate_original_arrangement(self) -> "RepairRequest":
+        n = self.guests
+        original = self.original_arrangement
+
+        if len(original) != n:
+            raise ValueError(
+                f"原座次长度为 {len(original)}，与宾客人数 {n} 不一致，"
+                "须为同规模的完整排列"
+            )
+
+        out_of_range = sorted({guest for guest in original if guest < 1 or guest > n})
+        if out_of_range:
+            raise ValueError(
+                f"原座次引用了不存在的宾客 {out_of_range[0]}，"
+                f"宾客编号须在 1~{n} 之间"
+            )
+
+        if len(set(original)) != n:
+            duplicates = sorted(
+                {guest for guest in original if original.count(guest) > 1}
+            )
+            raise ValueError(
+                f"原座次中宾客 {duplicates[0]} 重复出现，须为无重复的完整排列"
+            )
+
+        return self
+
+
 class EdgeScore(BaseModel):
     """圆桌邻接边上的得分明细。"""
 
@@ -135,4 +177,16 @@ class SeatingResponse(BaseModel):
     )
     reason: str | None = Field(
         None, description="无可行排列时的原因说明；可行时为 null"
+    )
+
+
+class RepairResponse(SeatingResponse):
+    """座位修复结果：在可行性、座次、边得分之外返回换座情况。"""
+
+    moved_guests: int = Field(
+        0, description="换座人数（新座次与原座次不同的座位数）；无解时为 0"
+    )
+    changed_seats: list[int] = Field(
+        default_factory=list,
+        description="发生变动的座位号（升序）；无可行排列时为空",
     )
